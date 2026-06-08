@@ -1,0 +1,58 @@
+name: Real Graph-RAG PR Blocker
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  analyze-blast-radius:
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/password
+        ports:
+          - 7687:7687
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install google-genai neo4j
+
+      - name: Wait for Neo4j
+        run: |
+          echo "Waiting for Neo4j to start up..."
+          sleep 20
+
+      - name: Ingest Monolith into Neo4j
+        run: |
+          python3 ingest.py
+
+      - name: Analyze PR and Post Comment
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_NAME: ${{ github.repository }}
+        run: |
+          # Fetch origin/main so we can diff against it
+          git fetch origin main:main
+          CHANGED_FILES=$(git diff --name-only main HEAD | grep '\.py$' || true)
+          
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No python files changed."
+            exit 0
+          fi
+          
+          echo "Executing dynamic blast radius analysis on files: $CHANGED_FILES"
+          python3 pr_reviewer.py $CHANGED_FILES
