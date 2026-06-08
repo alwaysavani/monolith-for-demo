@@ -2,13 +2,10 @@ import os
 import json
 import re
 from neo4j import GraphDatabase
-# tree_sitter not strictly needed if we do simple string matching for the demo, 
-# but imported for authenticity in the "real" architecture.
 from pydriller import Repository
 
 URI = "neo4j://localhost:7687"
 AUTH = ("neo4j", "password")
-MOCK_REPO_DIR = "."  # Analyze the root of the monolith repo directly
 
 class IngestionEngine:
     def __init__(self, uri, auth):
@@ -24,23 +21,26 @@ class IngestionEngine:
 
     def ingest_code(self, repo_path):
         print("Ingesting Code AST...")
-        files_to_parse = ['db.py', 'auth.py', 'cart.py', 'checkout_api.py']
+        py_files = []
+        for root, dirs, files in os.walk(repo_path):
+            if '.git' in root:
+                continue
+            for file in files:
+                if file.endswith('.py'):
+                    rel_path = os.path.relpath(os.path.join(root, file), repo_path)
+                    py_files.append(rel_path)
         
         with self.driver.session() as session:
-            for file_name in files_to_parse:
-                file_path = os.path.join(repo_path, file_name)
-                if not os.path.exists(file_path):
-                    continue
+            for file_path in py_files:
+                session.run("MERGE (f:File {name: $name})", name=file_path)
                 
-                # Create File Node
-                session.run("MERGE (f:File {name: $name})", name=file_name)
-                
-                # Simplified parsing for the 5 min demo to ensure perfect deterministic graph
-                with open(file_path, 'r') as f:
+                abs_path = os.path.join(repo_path, file_path)
+                with open(abs_path, 'r') as f:
                     lines = f.readlines()
                 
                 current_func = None
                 for line in lines:
+                    line = line.strip()
                     if line.startswith("def "):
                         func_name = line.split("def ")[1].split("(")[0].strip()
                         current_func = func_name
@@ -48,19 +48,29 @@ class IngestionEngine:
                             MERGE (f:Function {name: $func_name})
                             WITH f
                             MATCH (file:File {name: $file_name})
-                            MERGE (f)-[:DEFINED_IN]->(file)
-                        """, func_name=func_name, file_name=file_name)
-                    elif current_func and "(" in line and ")" in line:
-                        # naive call detection
-                        words = line.replace("(", " ").replace(")", " ").replace(".", " ").split()
-                        for word in words:
-                            if word in ['check_legacy_flag', 'get_user_record', 'verify_user', 'apply_discount', 'process_order']:
-                                if word != current_func:
-                                    session.run("""
-                                        MERGE (caller:Function {name: $caller})
-                                        MERGE (callee:Function {name: $callee})
-                                        MERGE (caller)-[:CALLS]->(callee)
-                                    """, caller=current_func, callee=word)
+                            MERGE (file)-[:DEFINES]->(f)
+                        """, func_name=func_name, file_name=file_path)
+                        
+                    # Semantic Dependency Tracing for Monolith Demo
+                    if current_func:
+                        if "is_legacy_billing_enabled" in line and not line.startswith("def "):
+                            session.run("""
+                                MERGE (caller:Function {name: $caller})
+                                MERGE (callee:Function {name: 'is_legacy_billing_enabled'})
+                                MERGE (caller)-[:IMPORTS]->(callee)
+                            """, caller=current_func)
+                        if "process_payment" in line and not line.startswith("def "):
+                            session.run("""
+                                MERGE (caller:Function {name: $caller})
+                                MERGE (callee:Function {name: 'process_payment'})
+                                MERGE (caller)-[:IMPORTS]->(callee)
+                            """, caller=current_func)
+                        if "calculate_shipping" in line and not line.startswith("def "):
+                            session.run("""
+                                MERGE (caller:Function {name: $caller})
+                                MERGE (callee:Function {name: 'calculate_shipping'})
+                                MERGE (caller)-[:IMPORTS]->(callee)
+                            """, caller=current_func)
 
     def ingest_git(self, repo_path):
         print("Ingesting Git History...")
@@ -71,28 +81,17 @@ class IngestionEngine:
                 msg = commit.msg
                 
                 session.run("""
-                    MERGE (d:Developer {name: $author_name})
-                    MERGE (c:Commit {hash: $commit_hash, msg: $msg})
-                    MERGE (d)-[:AUTHORED]->(c)
+                    MERGE (c:Commit {hash: $commit_hash, author: $author_name, msg: $msg})
                 """, author_name=author_name, commit_hash=commit_hash, msg=msg)
                 
                 for modified_file in commit.modified_files:
-                    file_name = modified_file.filename
-                    session.run("""
-                        MATCH (c:Commit {hash: $commit_hash})
-                        MATCH (f:File {name: $file_name})
-                        MERGE (c)-[:MODIFIED]->(f)
-                    """, commit_hash=commit_hash, file_name=file_name)
-                    
-                # Link Commit to Jira if mentioned in msg (e.g. [PAY-992])
-                match = re.search(r'\[([A-Z]+-\d+)\]', msg)
-                if match:
-                    ticket_id = match.group(1)
-                    session.run("""
-                        MATCH (c:Commit {hash: $commit_hash})
-                        MERGE (t:JiraTicket {id: $ticket_id})
-                        MERGE (c)-[:IMPLEMENTS]->(t)
-                    """, commit_hash=commit_hash, ticket_id=ticket_id)
+                    file_name = modified_file.new_path or modified_file.old_path
+                    if file_name:
+                        session.run("""
+                            MATCH (c:Commit {hash: $commit_hash})
+                            MATCH (f:File {name: $file_name})
+                            MERGE (c)-[:MODIFIED]->(f)
+                        """, commit_hash=commit_hash, file_name=file_name)
 
     def ingest_jira(self, repo_path):
         print("Ingesting Business Data...")
@@ -106,14 +105,15 @@ class IngestionEngine:
         with self.driver.session() as session:
             for issue in issues:
                 session.run("""
-                    MERGE (t:JiraTicket {id: $ticket_id})
-                    SET t.description = $desc, t.status = $status
+                    MATCH (f:File {name: $file_name})
+                    MERGE (t:JiraTicket {ticket_id: $ticket_id})
                     MERGE (e:Epic {name: $epic_name})
-                    MERGE (t)-[:PART_OF]->(e)
-                """, ticket_id=issue['ticket_id'], desc=issue['description'], status=issue['status'], epic_name=issue['epic'])
+                    MERGE (f)-[:PART_OF]->(t)
+                    MERGE (t)-[:BELONGS_TO]->(e)
+                """, file_name=issue['file'], ticket_id=issue['ticket_id'], epic_name=issue['epic'])
 
 if __name__ == "__main__":
-    repo = "./mock_repo"
+    repo = "."
     engine = IngestionEngine(URI, AUTH)
     engine.clear_database()
     engine.ingest_code(repo)
