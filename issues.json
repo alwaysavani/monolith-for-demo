@@ -2,21 +2,29 @@
   {
     "file": "frontend_api/graphql_resolvers.py",
     "ticket_id": "WEB-101",
+    "description": "Redesign Q3 checkout flow",
+    "status": "IN_PROGRESS",
     "epic": "Q3 Checkout Flow Redesign"
-  },
-  {
-    "file": "fulfillment_module/shipping_calculator.py",
-    "ticket_id": "LOG-402",
-    "epic": "Global Shipping Expansion"
   },
   {
     "file": "billing_module/payment_gateway.py",
     "ticket_id": "PAY-555",
+    "description": "Implement enterprise billing V2",
+    "status": "TODO",
     "epic": "Enterprise Billing V2"
+  },
+  {
+    "file": "fulfillment_module/shipping_calculator.py",
+    "ticket_id": "LOG-402",
+    "description": "Setup Global Shipping rules",
+    "status": "DONE",
+    "epic": "Global Shipping Expansion"
   },
   {
     "file": "core_infra/feature_flags.py",
     "ticket_id": "PLAT-909",
-    "epic": "Core Infrastructure Modernization"
+    "description": "Initialize feature flags for monolith",
+    "status": "DONE",
+    "epic": "Platform Stability"
   }
 ]
