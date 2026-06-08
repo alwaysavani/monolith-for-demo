@@ -81,3 +81,7 @@ if __name__ == "__main__":
     
     print(f"Found {len(blast_radius)} impacted downstream items.")
     generate_and_post_comment(changed_files, blast_radius, reviewers)
+    
+    if blast_radius:
+        print("Blast radius detected. Failing the CI check to block the PR.")
+        sys.exit(1)
