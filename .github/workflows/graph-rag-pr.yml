@@ -36,6 +36,8 @@ jobs:
 
       - name: Ingest Monolith into Neo4j
         run: |
+          echo "Checking out stable main branch for indexing..."
+          git checkout origin/main
           python3 ingest.py
 
       - name: Analyze PR and Post Comment
@@ -45,9 +47,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_NAME: ${{ github.repository }}
         run: |
-          # Fetch origin/main so we can diff against it
-          git fetch origin main:main
-          CHANGED_FILES=$(git diff --name-only main HEAD | grep '\.py$' || true)
+          echo "Switching back to PR branch..."
+          git checkout -
+          CHANGED_FILES=$(git diff --name-only origin/main HEAD | grep '\.py$' || true)
           
           if [ -z "$CHANGED_FILES" ]; then
             echo "No python files changed."
