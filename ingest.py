@@ -26,7 +26,7 @@ class IngestionEngine:
             if '.git' in root:
                 continue
             for file in files:
-                if file.endswith('.py'):
+                if file.endswith('.py') and file not in ['ingest.py', 'pr_reviewer.py']:
                     rel_path = os.path.relpath(os.path.join(root, file), repo_path)
                     py_files.append(rel_path)
         
